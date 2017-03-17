@@ -1,10 +1,15 @@
 GEM
-  remote: http://rubygems.org/
+  remote: https://rubygems.org/
   specs:
-    flickraw (0.9.3)
+    byebug (9.0.6)
+    flickraw (0.9.9)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
+  byebug
   flickraw
+
+BUNDLED WITH
+   1.12.3

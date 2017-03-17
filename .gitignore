@@ -1,2 +1,3 @@
-duplicatr.yml
-photos.yml
+.DS_Store
+downloads
+*.yml
