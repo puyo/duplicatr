@@ -2,14 +2,28 @@ GEM
   remote: https://rubygems.org/
   specs:
     byebug (9.0.6)
+    coderay (1.1.2)
+    ethon (0.8.1)
+      ffi (>= 1.3.0)
+    ffi (1.9.18)
     flickraw (0.9.9)
+    method_source (0.8.2)
+    pry (0.11.0)
+      coderay (~> 1.1.0)
+      method_source (~> 0.8.1)
+    pry-byebug (3.4.3)
+      byebug (>= 9.0, < 9.1)
+      pry (~> 0.10)
+    typhoeus (0.8.0)
+      ethon (>= 0.8.0)
 
 PLATFORMS
   ruby
 
 DEPENDENCIES
-  byebug
   flickraw
+  pry-byebug
+  typhoeus
 
 BUNDLED WITH
-   1.12.3
+   1.15.4

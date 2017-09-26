@@ -5,81 +5,136 @@ require 'yaml'
 require 'pathname'
 require 'set'
 require 'time'
+require 'typhoeus'
 
-module ByeFlickr
-  Config = YAML.load_file('duplicatr.yml')
+def dash_case(str)
+  str.gsub(/::/, '/').
+    gsub(/([A-Z]+)([A-Z][a-z])/,'\1_\2').
+    gsub(/([a-z\d])([A-Z])/,'\1_\2').
+    gsub(/\s/, '-').
+    tr('_', '-').
+    downcase
+end
 
-  def self.setup
-    FlickRaw.api_key = Config['api_key']
-    FlickRaw.shared_secret = Config['shared_secret']
-    flickr.access_token = Config['access_token']
-    flickr.access_secret = Config['access_secret']
-    @username = Config['username']
+class ByeFlickr
+  def initialize
+    @config = YAML.load_file('duplicatr.yml')
+    FlickRaw.api_key = @config['api_key']
+    FlickRaw.shared_secret = @config['shared_secret']
+    flickr.access_token = @config['access_token']
+    flickr.access_secret = @config['access_secret']
   end
 
-  def self.photos_yml
-    Pathname.new('photos.yml')
+  def username
+    config['username']
   end
 
-  def self.user
+  def user
     @user ||= flickr.people.findByUsername(username: @username)
   end
 
-  def self.fetch_photos_yml
-    page = 1
-    all = []
-    loop do
-      puts "Fetching page #{page}..."
-      photos = flickr.photos.search(user_id: user['nsid'], per_page: 500, page: page, tags: 'art')
-      break if photos.empty?
-      all.push(*photos)
-      page += 1
-    end
-    puts "Dumping photo index..."
-    photos_yml.open('w') do |f|
-      f.write(all.to_yaml)
+  def authenticate
+    if flickr.access_token.nil? || flickr.access_secret.nil?
+      token = flickr.get_request_token
+      auth_url = flickr.get_authorize_url(token['oauth_token'], perms: 'read')
+
+      puts "Open this url in your browser to complete the authentication process : #{auth_url}"
+      puts "Copy here the number given when you complete the process."
+      verify = gets.strip
+
+      begin
+        flickr.get_access_token(token['oauth_token'], token['oauth_token_secret'], verify)
+        login = flickr.test.login
+        puts "You are now authenticated as #{login.username} with token #{flickr.access_token} and secret #{flickr.access_secret}"
+      rescue FlickRaw::FailedResponse => e
+        puts "Authentication failed : #{e.msg}"
+      end
     end
   end
 
-  pp flickr.photos.getSizes(photo_id: photo['id'])
-
-  def self.fetch_file(uri, filename)
-    File.open(filename, 'w') do |f|
-      uri = URI.parse(url)
-      Net::HTTP.start(uri.host, uri.port) do |http|
-        http.request_get(uri.path) do |res|
-          res.read_body do |seg|
-            f << seg
-            sleep 0.005
+  def fetch_index
+    user_id = @config['user_id'] || user['nsid']
+    page = 1
+    loop do
+      begin
+        index_path = Pathname.new(format("index/%05d.yml", page))
+        if !index_path.exist?
+          puts "Fetching #{index_path}..."
+          index_path.dirname.mkpath
+          per_page = 500
+          photos = flickr.photos.search(user_id: user_id, per_page: per_page, page: page)
+          photos = photos.map{ |photo| photo.marshal_dump.first }
+          # check it's not identical to the last one...
+          begin
+            previous_list = YAML.load_file(Pathname.new(format("index/%05d.yml", page - 1)))
+            if previous_list == photos
+              break # done!
+            end
+          rescue
+            # OK
+          end
+          index_path.open('w') { |f| f.write(photos.to_yaml) }
+          if photos.size < per_page
+            break # done!
           end
         end
+        page += 1
       end
     end
   end
 
-  def self.fetch_all
-    photos = YAML.load_file(photos_yml)
-    photos.each do |photo|
-      title = photo['title']
-      info = flickr.photos.getInfo(photo_id: photo['id'])
-      timestamp = Time.parse(info['dates']['taken'])
-      o_url = FlickRaw.url_o(info)
-      slug = title.downcase.gsub(/[^0-9A-Za-z]+/, ' ').strip.gsub(' ', '-')
-      ext = File.extname(o_url)
-      download_path = timestamp.strftime("downloads/%Y-%m-%d_#{slug}#{ext}")
-      if !Pathname(download_path).exist?
-        puts title
-
-        system('curl', '-s', '-o', download_path, o_url)
-      else
-        puts "Skipping #{title}..."
+  def fetch_photos
+    Pathname.glob(Pathname.new('index/*.yml')) do |index_path|
+      photos = YAML.load_file(index_path)
+      photos.each do |photo|
+        title = photo['title']
+        id = photo['id']
+        #pp flickr.photos.getSizes(photo_id: photo['id'])
+        info = flickr.photos.getInfo(photo_id: id)
+        timestamp = Time.parse(info['dates']['taken'])
+        o_url = FlickRaw.url_o(info)
+        slug = dash_case(title)
+        if slug.size > 0
+          slug = '_' + slug.tr('_', '-')
+        end
+        ext = File.extname(o_url)
+        download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
+        fetch(url: o_url, path: download_path)
       end
     end
+  end
+
+  def fetch(url:, path:)
+    if path.exist?
+      puts "Skipping #{path} as it already exists..."
+      return
+    end
+    puts path
+    dl_path = Pathname.new('.download')
+    dl_path.open('wb') do |file|
+      request = Typhoeus::Request.new(url)
+      request.on_headers do |response|
+        if response.code != 200
+          raise 'Request failed'
+        end
+      end
+      request.on_body do |chunk|
+        file.write(chunk)
+        sleep 0.05
+      end
+      request.on_complete do |response|
+        file.close
+      end
+      request.run
+    end
+    path.dirname.mkpath
+    dl_path.rename(path)
   end
 end
 
 if __FILE__ == $0
-  ByeFlickr.setup
-  ByeFlickr.fetch_photos_yml
-  ByeFlickr.fetch_all
+  b = ByeFlickr.new
+  b.authenticate
+  b.fetch_index
+  b.fetch_photos
 end

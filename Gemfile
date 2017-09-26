@@ -1,4 +1,5 @@
 source 'https://rubygems.org'
 
 gem 'flickraw'
-gem 'byebug'
+gem 'pry-byebug'
+gem 'typhoeus'
