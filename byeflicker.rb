@@ -5,7 +5,6 @@ require 'yaml'
 require 'pathname'
 require 'set'
 require 'time'
-require 'typhoeus'
 
 def dash_case(str)
   str.gsub(/::/, '/').
@@ -62,7 +61,7 @@ class ByeFlickr
           puts "Fetching #{index_path}..."
           index_path.dirname.mkpath
           per_page = 500
-          photos = flickr.photos.search(user_id: user_id, per_page: per_page, page: page)
+          photos = flickr.photos.search(user_id: user_id, per_page: per_page, page: page, extras: 'date_taken,url_o,original_format')
           photos = photos.map{ |photo| photo.marshal_dump.first }
           # check it's not identical to the last one...
           begin
@@ -84,49 +83,37 @@ class ByeFlickr
   end
 
   def fetch_photos
+    all_photos = []
     Pathname.glob(Pathname.new('index/*.yml')) do |index_path|
       photos = YAML.load_file(index_path)
-      photos.each do |photo|
-        title = photo['title']
-        id = photo['id']
-        #pp flickr.photos.getSizes(photo_id: photo['id'])
-        info = flickr.photos.getInfo(photo_id: id)
-        timestamp = Time.parse(info['dates']['taken'])
-        o_url = FlickRaw.url_o(info)
-        slug = dash_case(title)
-        if slug.size > 0
-          slug = '_' + slug.tr('_', '-')
-        end
-        ext = File.extname(o_url)
-        download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
+      all_photos.push(*photos)
+    end
+    total = all_photos.size
+    all_photos.each_with_index do |photo, i|
+      title = photo['title']
+      id = photo['id']
+      timestamp = Time.parse(photo['datetaken'])
+      o_url = photo['url_o']
+      slug = dash_case(title)
+      if slug.size > 0
+        slug = '_' + slug.tr('_', '-')
+      end
+      ext = File.extname(o_url)
+      download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
+      percent = i * 100 / total
+      print format("%3d%% ", percent)
+      if download_path.exist?
+        puts "EXISTS      #{download_path}"
+      else
+        puts "DOWNLOADING #{download_path}"
         fetch(url: o_url, path: download_path)
       end
     end
   end
 
   def fetch(url:, path:)
-    if path.exist?
-      puts "Skipping #{path} as it already exists..."
-      return
-    end
-    puts path
     dl_path = Pathname.new('.download')
-    dl_path.open('wb') do |file|
-      request = Typhoeus::Request.new(url)
-      request.on_headers do |response|
-        if response.code != 200
-          raise 'Request failed'
-        end
-      end
-      request.on_body do |chunk|
-        file.write(chunk)
-        sleep 0.05
-      end
-      request.on_complete do |response|
-        file.close
-      end
-      request.run
-    end
+    system('curl', '--silent', '--limit-rate', '500K', '--output', dl_path.to_s, url)
     path.dirname.mkpath
     dl_path.rename(path)
   end
