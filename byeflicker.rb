@@ -103,24 +103,54 @@ class ByeFlickr
       percent = i * 100 / total
       print format("%3d%% ", percent)
 
+      prefix = timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}")
+
+      if photo['media'] == 'video'
+        jpg = Pathname.new(prefix + '.jpg')
+        jpg.delete if jpg.exist?
+      end
+
+      existing_paths = Dir.glob(prefix + '.*')
+      if existing_paths.any?
+        puts "EXISTS      #{existing_paths.first}"
+        next
+      end
+
       if photo['media'] == 'video'
         o_url = fetch_video_o_url(id: id)
       end
 
-      ext = File.extname(URI(o_url).path)
-      download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
-      if download_path.exist?
-        puts "EXISTS      #{download_path}"
-      else
+      begin
+        ext = File.extname(URI(o_url).path)
+        download_path = Pathname.new(prefix + ext)
         puts "DOWNLOADING #{download_path}"
         fetch(url: o_url, path: download_path)
+      rescue ArgumentError => e
+        puts "FAILURE     #{prefix}"
+        File.open("fail.log", "a") do |f|
+          f.puts e.to_s
+          f.puts photo.inspect
+          f.puts
+        end
       end
     end
   end
 
   def fetch(url:, path:)
     dl_path = Pathname.new('.download')
-    system('curl', '--silent', '--limit-rate', '500K', '--output', dl_path.to_s, url)
+    begin
+      5.times do
+        system('curl', '--silent', '--limit-rate', '500K', '--output', dl_path.to_s, url)
+        type = `file #{dl_path}`
+        if type.match(/html/)
+          $stderr.puts "Failed to download, got HTML"
+          $stderr.puts File.read(dl_path)
+          sleep 5
+        else
+          break
+        end
+      end
+    end
     path.dirname.mkpath
     dl_path.rename(path)
   end
