@@ -5,6 +5,7 @@ require 'yaml'
 require 'pathname'
 require 'set'
 require 'time'
+require 'uri'
 
 def dash_case(str)
   str.gsub(/::/, '/').
@@ -61,7 +62,7 @@ class ByeFlickr
           puts "Fetching #{index_path}..."
           index_path.dirname.mkpath
           per_page = 500
-          photos = flickr.photos.search(user_id: user_id, per_page: per_page, page: page, extras: 'date_taken,url_o,original_format')
+          photos = flickr.photos.search(user_id: user_id, per_page: per_page, page: page, extras: 'media,original_format,date_taken,url_o,original_format,path_alias')
           photos = photos.map{ |photo| photo.marshal_dump.first }
           # check it's not identical to the last one...
           begin
@@ -98,10 +99,16 @@ class ByeFlickr
       if slug.size > 0
         slug = '_' + slug.tr('_', '-')
       end
-      ext = File.extname(o_url)
-      download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
+
       percent = i * 100 / total
       print format("%3d%% ", percent)
+
+      if photo['media'] == 'video'
+        o_url = fetch_video_o_url(id: id)
+      end
+
+      ext = File.extname(URI(o_url).path)
+      download_path = Pathname.new(timestamp.strftime("downloads/%Y/%m-%d_#{id}#{slug}#{ext}"))
       if download_path.exist?
         puts "EXISTS      #{download_path}"
       else
@@ -116,6 +123,20 @@ class ByeFlickr
     system('curl', '--silent', '--limit-rate', '500K', '--output', dl_path.to_s, url)
     path.dirname.mkpath
     dl_path.rename(path)
+  end
+
+  # Requires you to log into Flickr and then copy the cookie out of your web
+  # browser into the YML file
+  def fetch_video_o_url(id:)
+    require 'typhoeus'
+    auth_url = 'https://www.flickr.com/video_download.gne?id=' + id
+    dl_url = nil
+    request = Typhoeus::Request.new(auth_url, headers: {Cookie: @config['cookie']})
+    request.on_complete do |response|
+      dl_url = response.headers['location']
+    end
+    request.run
+    return dl_url
   end
 end
 
